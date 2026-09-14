@@ -1,0 +1,30 @@
+name: Recover Drama Queen video
+
+on:
+  push:
+    paths:
+      - '.github/workflows/recover-drama-queen-video.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover original MP4 from Shopify carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/bluebell-drama-queen-IMG8456-video-carrier-20260914.png?v=1789392544' -o carrier.png
+          test "$(stat -c%s carrier.png)" -eq 8171331
+          tail -c +69 carrier.png > bluebell-drama-queen-IMG8456-original-20260914.mp4
+          test "$(stat -c%s bluebell-drama-queen-IMG8456-original-20260914.mp4)" -eq 8171263
+          test "$(dd if=bluebell-drama-queen-IMG8456-original-20260914.mp4 bs=1 skip=4 count=4 2>/dev/null)" = 'ftyp'
+          rm carrier.png
+          git config user.name 'bluebell-video-recovery'
+          git config user.email 'actions@github.com'
+          git add bluebell-drama-queen-IMG8456-original-20260914.mp4
+          git commit -m 'Add recovered Drama Queen hover video'
+          git push
