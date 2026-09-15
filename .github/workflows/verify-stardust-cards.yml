@@ -1,0 +1,110 @@
+name: Verify Stardust draft cards
+on:
+  push:
+    paths:
+      - '.github/workflows/verify-stardust-cards.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install browser verification dependencies
+        run: |
+          python -m pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+      - name: Verify video integrity and storefront playback
+        run: |
+          mkdir -p qa
+          python - <<'PY'
+          import json, hashlib
+          from pathlib import Path
+          from urllib.request import urlopen
+          from playwright.sync_api import sync_playwright
+          video_url = 'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/bluebell-stardust-IMG8537-original-20260915_ef15116c-6878-47bb-9f77-d9e5628da6b8.mp4?v=1789501751'
+          collection_url = 'https://bluebell-9826.myshopify.com/collections/all/sweaters?preview_theme_id=163540402432'
+          product_url = 'https://bluebell-9826.myshopify.com/products/stardust?preview_theme_id=163540402432'
+          report = {}
+          with urlopen(video_url, timeout=60) as response:
+              video_bytes = response.read()
+              report['video_content_type'] = response.headers.get('Content-Type')
+          report['video_size'] = len(video_bytes)
+          report['video_sha256'] = hashlib.sha256(video_bytes).hexdigest()
+          assert len(video_bytes) == 1729002
+          assert report['video_sha256'] == '5d7875e940fa7a17b19fb6ad79d8162bef64686b4e212119089a441e6ec16fe2'
+          assert report['video_content_type'].split(';')[0] == 'video/mp4'
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              context = browser.new_context(viewport={'width':1440,'height':1100})
+              page = context.new_page()
+              try:
+                  response = page.goto(collection_url, wait_until='domcontentloaded', timeout=60000)
+                  report['collection_http_status'] = response.status
+                  report['collection_final_url'] = page.url
+                  report['collection_title'] = page.title()
+                  page.screenshot(path='qa/collection-initial.png', full_page=True)
+                  assert '/password' not in page.url, 'Storefront preview requires a password; no authentication attempted'
+                  card = page.locator('.bsc-card[data-product-handle="stardust"]')
+                  card.wait_for(state='visible', timeout=30000)
+                  report['card_mode'] = card.get_attribute('data-motion-kind')
+                  report['card_source'] = card.get_attribute('data-motion-src')
+                  assert report['card_mode'] == 'video'
+                  assert report['card_source'] == video_url
+                  card.hover()
+                  page.wait_for_function('''() => { const c=document.querySelector('.bsc-card[data-product-handle="stardust"]'); const v=c?.querySelector('video'); return v && v.readyState >= 2 && v.currentTime > 0.1 && !v.paused && !v.error && c.classList.contains('is-playing'); }''', timeout=45000)
+                  report['playback'] = card.locator('video').evaluate('(v)=>({time:v.currentTime,paused:v.paused,readyState:v.readyState,width:v.videoWidth,height:v.videoHeight,src:v.currentSrc,muted:v.muted,loop:v.loop,playsInline:v.playsInline})')
+                  assert report['playback']['src'] == video_url
+                  page.screenshot(path='qa/stardust-playing.png', full_page=True)
+                  page.mouse.move(0,0)
+                  page.wait_for_function('''() => !document.querySelector('.bsc-card[data-product-handle="stardust"] video')''', timeout=5000)
+                  report['reset_after_hover'] = True
+                  card.hover()
+                  page.wait_for_function('''() => {const v=document.querySelector('.bsc-card[data-product-handle="stardust"] video');return v && v.currentTime>0.1 && !v.paused;}''', timeout=30000)
+                  report['second_hover_plays'] = True
+                  response = page.goto(product_url, wait_until='domcontentloaded', timeout=60000)
+                  report['product_http_status'] = response.status
+                  root = page.locator('[data-bluebell-product-page][data-product-handle="stardust"]')
+                  root.wait_for(state='visible', timeout=30000)
+                  page.wait_for_function('''() => document.querySelector('[data-bluebell-product-page][data-product-handle="stardust"]')?.dataset.bluebellOrderMode === 'custom' ''', timeout=30000)
+                  report['gallery'] = root.locator('.bluebell-product-page__gallery img').evaluate_all('(imgs)=>imgs.map(i=>({alt:i.alt,src:i.currentSrc||i.src}))')
+                  assert len(report['gallery']) == 4
+                  expected = ['stardust-detail','stardust-back-packshot','stardust-wine-with-hood','stardust-pink']
+                  assert all(name in item['src'] for name,item in zip(expected,report['gallery']))
+                  report['description'] = root.locator('.bluebell-product-page__purchase-description-body').inner_text()
+                  assert '70%' not in report['description'] and '30%' not in report['description']
+                  report['custom_colour_count'] = root.locator('.bluebell-product-page__swatches label:visible').count()
+                  assert report['custom_colour_count'] == 23
+                  report['custom_checkout_handler'] = root.locator('form').get_attribute('data-stardust-checkout-ready')
+                  assert report['custom_checkout_handler'] == 'true'
+                  root.locator('[data-order-mode-button="stock"]').click()
+                  page.wait_for_timeout(300)
+                  report['stock_colours'] = root.locator('.bluebell-product-page__swatches label:visible').evaluate_all('(els)=>els.map(e=>e.title)')
+                  assert set(report['stock_colours']) == {'Sorbet','Cassis'}
+                  root.locator('[data-order-mode-button="custom"]').click()
+                  assert root.locator('.bluebell-product-page__swatches label:visible').count() == 23
+                  report['custom_notes_visible'] = root.locator('[data-custom-order-notes]').is_visible()
+                  assert report['custom_notes_visible']
+                  page.screenshot(path='qa/stardust-product.png', full_page=True)
+                  report['result'] = 'PASS'
+              except Exception as error:
+                  report['result'] = 'FAIL'
+                  report['error'] = str(error)
+                  report['last_url'] = page.url
+                  try:
+                      report['page_excerpt'] = page.locator('body').inner_text(timeout=3000)[:1500]
+                      page.screenshot(path='qa/failure.png', full_page=True)
+                  except Exception:
+                      pass
+                  raise
+              finally:
+                  Path('qa/report.json').write_text(json.dumps(report,indent=2))
+                  print('STARDUST_QA_REPORT=' + json.dumps(report))
+                  browser.close()
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stardust-draft-card-verification
+          path: qa/
+          retention-days: 7
