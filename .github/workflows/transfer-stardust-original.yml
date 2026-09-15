@@ -1,0 +1,42 @@
+name: Transfer original Stardust MP4
+on:
+  push:
+    paths:
+      - '.github/workflows/transfer-stardust-original.yml'
+permissions:
+  contents: write
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact original video bytes and verify integrity
+        run: |
+          python -m pip install --quiet Pillow
+          python - <<'PY'
+          from urllib.request import Request, urlopen
+          from io import BytesIO
+          from pathlib import Path
+          import hashlib
+          from PIL import Image
+          url = 'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/stardust-original-transfer-integrity.png?v=1789501611&format=png'
+          request = Request(url, headers={'Accept': 'image/png'})
+          with urlopen(request, timeout=90) as response:
+              packet = response.read()
+          image = Image.open(BytesIO(packet))
+          assert image.size == (1024, 1689), f'Unexpected transfer dimensions: {image.size}'
+          original = image.convert('L').tobytes()[:1729002]
+          digest = hashlib.sha256(original).hexdigest()
+          assert digest == '5d7875e940fa7a17b19fb6ad79d8162bef64686b4e212119089a441e6ec16fe2', f'Integrity check failed: {digest}'
+          assert original[4:8] == b'ftyp'
+          Path('bluebell-stardust-IMG8537-original-20260915.mp4').write_bytes(original)
+          print(f'Original MP4 verified: {len(original)} bytes; SHA-256 {digest}')
+          PY
+          ffprobe -v error -show_entries format=size,duration:stream=codec_name,codec_type,width,height -of json bluebell-stardust-IMG8537-original-20260915.mp4
+          git config user.name 'bluebell-media-transfer'
+          git config user.email 'actions@github.com'
+          git add bluebell-stardust-IMG8537-original-20260915.mp4
+          if ! git diff --cached --quiet; then
+            git commit -m 'Add byte-identical original Stardust MP4'
+            git push
+          fi
