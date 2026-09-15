@@ -32,7 +32,6 @@ jobs:
           Path('bluebell-stardust-IMG8537-original-20260915.mp4').write_bytes(original)
           print(f'Original MP4 verified: {len(original)} bytes; SHA-256 {digest}')
           PY
-          ffprobe -v error -show_entries format=size,duration:stream=codec_name,codec_type,width,height -of json bluebell-stardust-IMG8537-original-20260915.mp4
           git config user.name 'bluebell-media-transfer'
           git config user.email 'actions@github.com'
           git add bluebell-stardust-IMG8537-original-20260915.mp4
