@@ -1,0 +1,49 @@
+name: Verify Alchemist Shopify assets
+on:
+  push:
+    paths:
+      - '.github/workflows/verify-alchemist-assets.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify native MP4 and approved images
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from urllib.request import Request, urlopen
+          video_url = 'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/bluebell-alchemist-IMG8777-original-20260916.mp4?v=1789583135'
+          report = {}
+          with urlopen(video_url, timeout=60) as r:
+              data = r.read()
+              report['video'] = {'status':r.status,'mime':r.headers.get('Content-Type'),'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+          assert report['video']['mime'].split(';')[0] == 'video/mp4'
+          assert len(data) == 5827078
+          assert report['video']['sha256'] == 'a24e2c56396ffd7c04570f200ccd29c98c9aed0ed0480ff91bf072543dddf06a'
+          assert data[4:8] == b'ftyp'
+          images = [
+            'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/alchemist-front-packshot.jpg?v=1789582564',
+            'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/alchemist-img8566-detail.jpg?v=1789582491',
+            'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/alchemist-champagne.jpg?v=1789582510',
+            'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/alchemist-beach.jpg?v=1789582530',
+            'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/alchemist-flowers.jpg?v=1789582543'
+          ]
+          report['images'] = []
+          for url in images:
+              with urlopen(Request(url,headers={'Accept':'image/jpeg'}),timeout=45) as r:
+                  data = r.read()
+                  item = {'url':url,'status':r.status,'mime':r.headers.get('Content-Type'),'bytes':len(data)}
+                  assert r.status == 200 and item['mime'].startswith('image/') and len(data)>10000
+                  report['images'].append(item)
+          report['preview'] = []
+          for path in ['products/alchemist','collections/all/sweaters']:
+              url = 'https://bluebell-9826.myshopify.com/' + path + '?preview_theme_id=163540402432'
+              with urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=45) as r:
+                  html = r.read().decode('utf-8',errors='replace')
+                  report['preview'].append({'path':path,'status':r.status,'final_url':r.geturl(),'password_gate':'/password' in r.geturl(),'alchemist_rendered':'data-product-handle="alchemist"' in html})
+          report['asset_verification'] = 'PASS'
+          print('ALCHEMIST_ASSET_REPORT=' + json.dumps(report))
+          PY
