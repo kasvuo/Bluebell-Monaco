@@ -1,0 +1,42 @@
+name: Transfer original Alchemist MP4
+on:
+  push:
+    paths:
+      - '.github/workflows/transfer-alchemist-original.yml'
+permissions:
+  contents: write
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact original video bytes and verify integrity
+        run: |
+          python -m pip install --quiet Pillow
+          python - <<'PY'
+          from urllib.request import Request, urlopen
+          from io import BytesIO
+          from pathlib import Path
+          import hashlib
+          from PIL import Image
+          url = 'https://cdn.shopify.com/s/files/1/0837/4521/0624/files/alchemist-original-transfer-integrity-20260916.png?v=1789582824&format=png'
+          request = Request(url, headers={'Accept': 'image/png'})
+          with urlopen(request, timeout=90) as response:
+              packet = response.read()
+          image = Image.open(BytesIO(packet))
+          assert image.size == (2048, 2846), f'Unexpected transfer dimensions: {image.size}'
+          original = image.convert('L').tobytes()[:5827078]
+          digest = hashlib.sha256(original).hexdigest()
+          assert digest == 'a24e2c56396ffd7c04570f200ccd29c98c9aed0ed0480ff91bf072543dddf06a', f'Integrity check failed: {digest}'
+          assert original[4:8] == b'ftyp'
+          Path('bluebell-alchemist-IMG8777-original-20260916.mp4').write_bytes(original)
+          print(f'Original MP4 verified: {len(original)} bytes; SHA-256 {digest}')
+          PY
+          git config user.name 'bluebell-media-transfer'
+          git config user.email 'actions@github.com'
+          git add bluebell-alchemist-IMG8777-original-20260916.mp4
+          if ! git diff --cached --quiet; then
+            git commit -m 'Add byte-identical original Alchemist MP4'
+            git push
+          fi
