@@ -1,0 +1,41 @@
+name: Transfer original Snowflake MP4
+on:
+  push:
+    paths:
+      - '.github/workflows/transfer-snowflake-original-20260917.yml'
+permissions:
+  contents: write
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact original MP4 bytes
+        run: |
+          python -m pip install --quiet Pillow
+          python - <<'PY'
+          from urllib.request import Request, urlopen
+          from io import BytesIO
+          from pathlib import Path
+          from PIL import Image
+          import hashlib
+          url='https://cdn.shopify.com/s/files/1/0837/4521/0624/files/snowflake-original-transfer-integrity-20260917.png?v=1789648998&format=png'
+          with urlopen(Request(url,headers={'Accept':'image/png'}),timeout=90) as response:
+              packet=response.read()
+          image=Image.open(BytesIO(packet))
+          assert image.size==(2048,2748)
+          original=image.convert('L').tobytes()[:5626471]
+          digest=hashlib.sha256(original).hexdigest()
+          assert digest=='7ce6375ff1bd8e319bd26043c09662e6922b75cd04c01f2c2cb24594c69c1810', digest
+          assert original[4:8]==b'ftyp'
+          Path('bluebell-snowflake-IMG8773-original-20260917.mp4').write_bytes(original)
+          print(f'Original verified: {len(original)} bytes; SHA-256 {digest}')
+          PY
+          git config user.name 'bluebell-media-transfer'
+          git config user.email 'actions@github.com'
+          git add bluebell-snowflake-IMG8773-original-20260917.mp4
+          if ! git diff --cached --quiet; then
+            git commit -m 'Add byte-identical original Snowflake MP4'
+            git push
+          fi
