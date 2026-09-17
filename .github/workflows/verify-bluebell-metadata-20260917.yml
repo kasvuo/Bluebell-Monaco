@@ -1,0 +1,118 @@
+name: Verify Bluebell metadata hover videos
+on:
+  push:
+    paths:
+      - '.github/workflows/verify-bluebell-metadata-20260917.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install browser
+        run: |
+          python -m pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+      - name: Test real Shopify MP4 assets and metadata runtime
+        run: |
+          mkdir -p qa
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.request import Request,urlopen
+          import hashlib,json
+          from playwright.sync_api import sync_playwright
+          prefix='https://cdn.shopify.com/s/files/1/0837/4521/0624/files/'
+          urls={
+            'it-girl':prefix+'bluebell-it-girl-IMG8553-original-20260912.mp4?v=1789221176',
+            'cloud-9':prefix+'bluebell-cloud-9-IMG8435-original-20260912.mp4?v=1789221176',
+            'snowflake':prefix+'bluebell-snowflake-IMG8773-original-20260917.mp4?v=1789649073',
+            'stardust':prefix+'bluebell-stardust-IMG8537-original-20260915_ef15116c-6878-47bb-9f77-d9e5628da6b8.mp4?v=1789501751',
+            'alchemist':prefix+'bluebell-alchemist-IMG8777-original-20260916.mp4?v=1789583135',
+            'happy-hour':prefix+'bluebell-happy-hour-IMG8364-final-20260909.mp4?v=1788973343',
+            'drama-queen':prefix+'bluebell-drama-queen-IMG8456-original-20260914_6ede244f-2f92-4d16-a778-b6fa70edc52d.mp4?v=1789395014',
+            'date-me':'https://cdn.shopify.com/videos/c/vp/a17e7e6b3b2d4ad28ece7868fa9deab7/a17e7e6b3b2d4ad28ece7868fa9deab7.HD-720p-2.1Mbps-93171907.mp4',
+            'beach-babe':prefix+'bluebell-beach-babe-IMG8366-original-20260909.mp4?v=1788964301'
+          }
+          report={'cdn':{},'runtime_md5':hashlib.md5(Path('theme-assets/bluebell-hover-metadata-20260917.js').read_bytes()).hexdigest()}
+          for name,url in urls.items():
+              with urlopen(Request(url,method='HEAD'),timeout=40) as response:
+                  report['cdn'][name]={'status':response.status,'mime':response.headers.get('Content-Type')}
+                  assert response.status==200 and report['cdn'][name]['mime'].split(';')[0]=='video/mp4'
+          with urlopen(urls['snowflake'],timeout=60) as response:
+              snowflake=response.read()
+          report['snowflake_bytes']=len(snowflake)
+          report['snowflake_sha256']=hashlib.sha256(snowflake).hexdigest()
+          assert len(snowflake)==5626471
+          assert report['snowflake_sha256']=='7ce6375ff1bd8e319bd26043c09662e6922b75cd04c01f2c2cb24594c69c1810'
+          runtime=Path('theme-assets/bluebell-hover-metadata-20260917.js').read_text()
+          html='''<!doctype html><html><head><style>body{margin:30px}.grid{display:flex;gap:12px;flex-wrap:wrap}.bsc-card,.bpc-card{width:200px;height:280px}.bsc-card-link,.bpc-card-link{position:relative;display:block;width:100%;height:100%}.bsc-media,.bpc-media,.bsc-primary,.bpc-primary,.bsc-motion,.bpc-motion,video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.bsc-primary,.bpc-primary{background:#dedede;z-index:2;opacity:1}.bsc-motion,.bpc-motion{z-index:1;pointer-events:none}.is-playing .bsc-primary,.is-playing .bpc-primary{opacity:0}.bsc-info,.bpc-info{position:absolute;z-index:3;bottom:0;background:white}.native{position:relative;width:200px;height:280px}</style></head><body><div class="grid">'''
+          dynamic=list(urls)[:7]
+          for name in dynamic:
+              c='bpc' if name in ['happy-hour','drama-queen'] else 'bsc'
+              direct=' data-touch-navigation="direct"' if name in ['stardust','alchemist'] else ''
+              html+=f'<article class="{c}-card" data-product-handle="{name}" data-motion-kind="video" data-motion-src="{urls[name]}"{direct}><a class="{c}-card-link" href="https://bluebell-9826.myshopify.com/products/{name}"><span class="{c}-media"><span class="{c}-primary"></span><span class="{c}-motion" data-motion-mount></span></span><span class="{c}-info">{name}</span></a></article>'
+          for name in ['date-me','beach-babe']:
+              html+=f'<div class="native"><video data-bluebell-cardigan-hover-video data-native-handle="{name}" muted loop playsinline preload="metadata"><source src="{urls[name]}" type="video/mp4"></video></div>'
+          html+='</div></body></html>'
+          with sync_playwright() as p:
+              browser=p.chromium.launch()
+              page=browser.new_page(viewport={'width':1600,'height':1000})
+              errors=[];requests=[]
+              page.on('pageerror',lambda error:errors.append(str(error)))
+              page.on('request',lambda request:requests.append(request.url) if '.mp4' in request.url else None)
+              try:
+                  page.set_content(html)
+                  page.add_script_tag(content=runtime)
+                  page.add_script_tag(content=runtime)
+                  page.wait_for_function('document.querySelectorAll("video").length===9 && Array.from(document.querySelectorAll("video")).every(v=>v.readyState>=1)',timeout=45000)
+                  report['before_hover']=page.locator('video').evaluate_all('(vs)=>vs.map(v=>({preload:v.preload,autoplay:v.autoplay,paused:v.paused,readyState:v.readyState,src:v.currentSrc}))')
+                  assert all(v['preload']=='metadata' and v['paused'] and not v['autoplay'] for v in report['before_hover'])
+                  assert len(set(requests))>=9
+                  report['metadata_requested_before_hover']=True
+                  for name in dynamic:
+                      selector=f'[data-product-handle="{name}"]';card=page.locator(selector)
+                      card.evaluate('(c)=>{window.testVideo=c.querySelector("video");window.testSrc=c.querySelector("video source").src;}')
+                      card.hover()
+                      page.wait_for_function('(s)=>{const c=document.querySelector(s);const v=c.querySelector("video");return v.currentTime>0.05&&!v.paused&&c.classList.contains("is-playing");}',arg=selector,timeout=30000)
+                      assert page.locator('video').evaluate_all('(vs)=>vs.filter(v=>!v.paused).length')==1
+                      page.mouse.move(2,2)
+                      page.wait_for_function('(s)=>{const c=document.querySelector(s);const v=c.querySelector("video");return v.paused&&v.currentTime===0&&!c.classList.contains("is-playing")&&v===window.testVideo&&v.querySelector("source").src===window.testSrc;}',arg=selector,timeout=5000)
+                      card.hover()
+                      page.wait_for_function('(s)=>{const c=document.querySelector(s);const v=c.querySelector("video");return v.currentTime>0.05&&!v.paused&&c.classList.contains("is-playing")&&v===window.testVideo;}',arg=selector,timeout=15000)
+                      page.mouse.move(2,2)
+                      report[name]={'hover':True,'repeat_hover':True,'same_player_retained':True,'pause_rewind':True,'only_one_playing':True}
+                  for name in ['date-me','beach-babe']:
+                      video=page.locator(f'[data-native-handle="{name}"]')
+                      video.evaluate('(v)=>{v.muted=true;return v.play();}')
+                      page.wait_for_function('(n)=>document.querySelector(`[data-native-handle="${n}"]`).currentTime>0.05',arg=name,timeout=20000)
+                      video.evaluate('(v)=>{v.pause();v.currentTime=0;}')
+                      report[name]={'native_metadata_playback':True}
+                  for name in dynamic:
+                      assert page.locator(f'[data-product-handle="{name}"]').evaluate('''c=>{c.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'mouse'}));const e=new MouseEvent('click',{bubbles:true,cancelable:true});c.dispatchEvent(e);return !e.defaultPrevented;}''')
+                  for name in ['stardust','alchemist']:
+                      assert page.locator(f'[data-product-handle="{name}"]').evaluate('''c=>{c.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch'}));const e=new MouseEvent('click',{bubbles:true,cancelable:true});c.dispatchEvent(e);return !e.defaultPrevented;}''')
+                  report['mouse_and_direct_touch_clicks_unblocked']=True
+                  page.evaluate('''()=>{const c=document.querySelector('[data-product-handle="snowflake"]').cloneNode(true);c.dataset.productHandle='future-product';c.querySelector('[data-motion-mount]').replaceChildren();document.querySelector('.grid').append(c);}''')
+                  page.wait_for_function('''()=>{const v=document.querySelector('[data-product-handle="future-product"] video');return v&&v.preload==='metadata'&&v.paused&&v.readyState>=1;}''',timeout=15000)
+                  report['future_cards_metadata_by_default']=True
+                  assert not errors,errors
+                  report['javascript_errors']=errors
+                  page.screenshot(path='qa/metadata-cards.png',full_page=True)
+                  report['result']='PASS'
+              except Exception as error:
+                  report['result']='FAIL';report['error']=str(error)
+                  report['video_state']=page.locator('video').evaluate_all('(vs)=>vs.map(v=>({src:v.currentSrc,state:v.readyState,error:v.error?.code,paused:v.paused,time:v.currentTime}))')
+                  raise
+              finally:
+                  Path('qa/report.json').write_text(json.dumps(report,indent=2))
+                  print('BLUEBELL_METADATA_REPORT='+json.dumps(report))
+                  browser.close()
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bluebell-metadata-video-verification
+          path: qa/
+          retention-days: 7
