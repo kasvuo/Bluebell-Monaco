@@ -1,0 +1,41 @@
+name: Transfer original Nuage 75 IMG8892 MP4
+on:
+  push:
+    paths:
+      - '.github/workflows/transfer-nuage75-img8892-original-20260918.yml'
+permissions:
+  contents: write
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact original MP4 bytes
+        run: |
+          python -m pip install --quiet Pillow
+          python - <<'PY'
+          from urllib.request import Request, urlopen
+          from io import BytesIO
+          from pathlib import Path
+          from PIL import Image
+          import hashlib
+          url='https://cdn.shopify.com/s/files/1/0837/4521/0624/files/nuage75-img8892-transfer-integrity-20260918.png?v=1789740870&format=png'
+          with urlopen(Request(url,headers={'Accept':'image/png'}),timeout=90) as response:
+              packet=response.read()
+          image=Image.open(BytesIO(packet))
+          assert image.size==(2048,1968), image.size
+          original=image.convert('L').tobytes()[:4029676]
+          digest=hashlib.sha256(original).hexdigest()
+          assert digest=='742c7c8f01d544f0622e1b0cf174d440bde1ae793ee7ae2844e8687c5ad72a85', digest
+          assert original[4:8]==b'ftyp'
+          Path('bluebell-nuage75-IMG8892-original-20260918.mp4').write_bytes(original)
+          print(f'Original verified: {len(original)} bytes; SHA-256 {digest}')
+          PY
+          git config user.name 'bluebell-media-transfer'
+          git config user.email 'actions@github.com'
+          git add bluebell-nuage75-IMG8892-original-20260918.mp4
+          if ! git diff --cached --quiet; then
+            git commit -m 'Add byte-identical original Nuage 75 IMG8892 MP4'
+            git push
+          fi
